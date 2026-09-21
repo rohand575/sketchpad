@@ -37,6 +37,21 @@ export function useKeyboardShortcuts(spaceRef: React.MutableRefObject<boolean>):
         spaceRef.current = true
         return
       }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (s.selectedIds.length > 0) {
+          e.preventDefault()
+          s.deleteSelection()
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        s.clearSelection()
+        return
+      }
+      if (e.key.toLowerCase() === 'v') {
+        s.setMode('select')
+        return
+      }
       if (e.key === '[' || e.key === ']') {
         const delta = e.key === '[' ? -1 : 1
         const preset = BRUSH_PRESETS[s.tool.tool]

@@ -4,7 +4,7 @@ import type { BrushType } from '@/model/types'
 import { IconButton, Panel } from './primitives'
 import { ColorPicker } from './ColorPicker'
 import { BrushControls } from './BrushControls'
-import { EraserIcon, MarkerIcon, PenIcon, PencilIcon } from './icons'
+import { EraserIcon, MarkerIcon, PenIcon, PencilIcon, SelectIcon } from './icons'
 
 const TOOLS: { type: BrushType; Icon: typeof PenIcon; label: string; key: string }[] = [
   { type: 'pen', Icon: PenIcon, label: 'Pen', key: 'B' },
@@ -15,9 +15,11 @@ const TOOLS: { type: BrushType; Icon: typeof PenIcon; label: string; key: string
 
 export function Toolbar({ touch }: { touch: boolean }) {
   const tool = useStore((s) => s.tool.tool)
+  const mode = useStore((s) => s.mode)
   const color = useStore((s) => s.tool.color)
   const size = useStore((s) => s.tool.sizes[s.tool.tool])
   const setTool = useStore((s) => s.setTool)
+  const setMode = useStore((s) => s.setMode)
   const [popover, setPopover] = useState<'color' | 'brush' | null>(null)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -40,7 +42,7 @@ export function Toolbar({ touch }: { touch: boolean }) {
           <IconButton
             key={type}
             className={btn}
-            active={tool === type}
+            active={mode === 'draw' && tool === type}
             label={touch ? label : `${label} (${key})`}
             onClick={() => {
               setTool(type)
@@ -50,6 +52,20 @@ export function Toolbar({ touch }: { touch: boolean }) {
             <Icon width={iconSize} height={iconSize} />
           </IconButton>
         ))}
+
+        <div className="my-1 h-px w-7 bg-white/10" />
+
+        <IconButton
+          className={btn}
+          active={mode === 'select'}
+          label={touch ? 'Select' : 'Select (V)'}
+          onClick={() => {
+            setMode(mode === 'select' ? 'draw' : 'select')
+            setPopover(null)
+          }}
+        >
+          <SelectIcon width={iconSize} height={iconSize} />
+        </IconButton>
 
         <div className="my-1 h-px w-7 bg-white/10" />
 

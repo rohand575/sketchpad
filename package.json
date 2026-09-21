@@ -12,13 +12,14 @@
     "lint": "eslint . --ext .ts,.tsx"
   },
   "dependencies": {
+    "dexie": "^4.0.8",
+    "firebase": "^10.14.1",
     "immer": "^10.1.1",
+    "nanoid": "^5.0.7",
     "perfect-freehand": "^1.2.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "zustand": "^4.5.5",
-    "dexie": "^4.0.8",
-    "nanoid": "^5.0.7"
+    "zustand": "^4.5.5"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

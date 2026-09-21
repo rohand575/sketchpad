@@ -1,16 +1,49 @@
-import type { Camera, StrokePoint } from '@/model/types'
-import { panBy, rotateAt, screenToWorld, zoomAt } from '@/engine/camera'
+import type { Bounds, Camera, Element, StrokePoint } from '@/model/types'
+import { panBy, rotateAt, screenToWorld, worldToScreen, zoomAt, type Point } from '@/engine/camera'
 import type { LiveStroke } from '@/engine/renderer/types'
+import {
+  applyMatrixToElement,
+  boundsCenter,
+  elementsInRect,
+  handleLayout,
+  hitHandle,
+  hitTest,
+  oppositeCorner,
+  rotateAbout,
+  scaleAbout,
+  translation,
+  type Matrix,
+} from '@/engine/selection'
+
+export interface ScreenRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface SelectionCallbacks {
+  getElements: () => Element[]
+  getSelectedIds: () => string[]
+  getSelectionBounds: () => Bounds | null
+  setSelection: (ids: string[]) => void
+  clearSelection: () => void
+  beginInteraction: () => void
+  previewElements: (elements: Element[]) => void
+  endInteraction: () => void
+  onMarquee: (rect: ScreenRect | null) => void
+}
 
 export interface ControllerCallbacks {
   getCamera: () => Camera
   setCamera: (c: Camera) => void
+  getMode: () => 'draw' | 'select'
   beginStroke: () => LiveStroke | null
   extendStroke: (points: StrokePoint[]) => void
   endStroke: () => void
   cancelStroke: () => void
-  /** True while a modifier forces panning (e.g. space held / middle mouse). */
   isPanKeyHeld: () => boolean
+  select: SelectionCallbacks
 }
 
 interface ActivePointer {
@@ -20,14 +53,10 @@ interface ActivePointer {
   y: number
 }
 
-/**
- * Unifies mouse / touch / pen input via Pointer Events:
- *  - primary pen/mouse (or single finger when no pen present) -> drawing
- *  - two fingers -> pan + pinch-zoom + twist-rotate
- *  - space / middle-mouse -> pan
- *  - wheel -> pan; ctrl/pinch wheel -> zoom
- * Uses getCoalescedEvents() for high-frequency stylus sampling.
- */
+type SelectAction = 'move' | 'scale' | 'rotate' | 'marquee' | null
+
+const TAP_THRESHOLD = 4
+
 export class PointerController {
   private el: HTMLElement
   private cb: ControllerCallbacks
@@ -37,12 +66,23 @@ export class PointerController {
   private lastPan = { x: 0, y: 0 }
   private penSeen = false
 
-  // gesture (two-finger) state
+  // selection interaction
+  private selectAction: SelectAction = null
+  private selectPointerId: number | null = null
+  private downScreen: Point = { x: 0, y: 0 }
+  private moved = false
+  private snapshot: Element[] = []
+  private snapshotIds = new Set<string>()
+  private moveStart: Point = { x: 0, y: 0 }
+  private scaleAnchor: Point = { x: 0, y: 0 }
+  private scaleStartDist = 1
+  private rotateCenter: Point = { x: 0, y: 0 }
+  private rotateStartAngle = 0
+
   private gesture: {
     ids: [number, number]
     startDist: number
     startAngle: number
-    startCentroid: { x: number; y: number }
     lastCentroid: { x: number; y: number }
   } | null = null
 
@@ -67,15 +107,15 @@ export class PointerController {
     el.removeEventListener('wheel', this.onWheel)
   }
 
-  private localPoint(e: PointerEvent | WheelEvent): { x: number; y: number } {
+  private localPoint(e: PointerEvent | WheelEvent): Point {
     const r = this.el.getBoundingClientRect()
     return { x: e.clientX - r.left, y: e.clientY - r.top }
   }
 
   private pressureOf(e: PointerEvent): number {
-    if (e.pointerType === 'pen') return e.pressure > 0 ? e.pressure : 0.5
-    if (e.pointerType === 'touch') return e.pressure > 0 ? e.pressure : 0.5
-    // mouse: no real pressure; use a neutral value (velocity sim handles taper)
+    if (e.pointerType === 'pen' || e.pointerType === 'touch') {
+      return e.pressure > 0 ? e.pressure : 0.5
+    }
     return 0.5
   }
 
@@ -85,6 +125,11 @@ export class PointerController {
     return { x: w.x, y: w.y, p: this.pressureOf(e) }
   }
 
+  private worldAt(e: PointerEvent): Point {
+    const p = this.localPoint(e)
+    return screenToWorld(this.cb.getCamera(), p.x, p.y)
+  }
+
   private onDown = (e: PointerEvent) => {
     this.el.setPointerCapture?.(e.pointerId)
     const p = this.localPoint(e)
@@ -92,31 +137,31 @@ export class PointerController {
     if (e.pointerType === 'pen') this.penSeen = true
 
     const touchCount = [...this.pointers.values()].filter((pt) => pt.type === 'touch').length
-
-    // Two-finger gesture takes over (cancel any active stroke).
     if (touchCount >= 2) {
       if (this.drawingId !== null) {
         this.cb.cancelStroke()
         this.drawingId = null
       }
+      this.cancelSelectAction()
       this.startGesture()
       return
     }
 
-    // Pan via middle mouse or held space.
-    const wantPan =
-      (e.pointerType === 'mouse' && e.button === 1) || this.cb.isPanKeyHeld()
+    const wantPan = (e.pointerType === 'mouse' && e.button === 1) || this.cb.isPanKeyHeld()
     if (wantPan) {
       this.panning = true
       this.lastPan = p
       return
     }
 
-    // Palm rejection: once a pen is in use, ignore finger touches for drawing.
     if (e.pointerType === 'touch' && this.penSeen) return
     if (e.pointerType === 'mouse' && e.button !== 0) return
 
-    // Begin drawing.
+    if (this.cb.getMode() === 'select') {
+      this.onSelectDown(e)
+      return
+    }
+
     const live = this.cb.beginStroke()
     if (live) {
       this.drawingId = e.pointerId
@@ -136,7 +181,6 @@ export class PointerController {
       this.updateGesture()
       return
     }
-
     if (this.panning) {
       const p = this.localPoint(e)
       const dx = p.x - this.lastPan.x
@@ -145,15 +189,16 @@ export class PointerController {
       this.cb.setCamera(panBy(this.cb.getCamera(), dx, dy))
       return
     }
-
+    if (this.selectPointerId === e.pointerId) {
+      this.onSelectMove(e)
+      return
+    }
     if (this.drawingId === e.pointerId) {
       const events =
         'getCoalescedEvents' in e && typeof e.getCoalescedEvents === 'function'
           ? e.getCoalescedEvents()
           : [e]
-      const pts = (events.length ? events : [e]).map((ev) =>
-        this.toStrokePoint(ev as PointerEvent),
-      )
+      const pts = (events.length ? events : [e]).map((ev) => this.toStrokePoint(ev as PointerEvent))
       this.cb.extendStroke(pts)
     }
   }
@@ -171,6 +216,10 @@ export class PointerController {
       this.panning = false
       return
     }
+    if (this.selectPointerId === e.pointerId) {
+      this.onSelectUp(e)
+      return
+    }
     if (this.drawingId === e.pointerId) {
       this.cb.endStroke()
       this.drawingId = null
@@ -183,6 +232,7 @@ export class PointerController {
       this.cb.cancelStroke()
       this.drawingId = null
     }
+    if (this.selectPointerId === e.pointerId) this.cancelSelectAction()
     this.gesture = null
     this.panning = false
   }
@@ -192,7 +242,6 @@ export class PointerController {
     const anchor = this.localPoint(e)
     const cam = this.cb.getCamera()
     if (e.ctrlKey) {
-      // pinch-zoom on trackpads reports ctrlKey; also Ctrl+wheel on mouse
       const factor = Math.exp(-e.deltaY * 0.01)
       this.cb.setCamera(zoomAt(cam, factor, anchor))
     } else {
@@ -200,7 +249,147 @@ export class PointerController {
     }
   }
 
-  // --- two-finger gesture ---
+  // --- selection ---
+  private onSelectDown(e: PointerEvent): void {
+    this.selectPointerId = e.pointerId
+    this.downScreen = this.localPoint(e)
+    this.moved = false
+
+    const sel = this.cb.select
+    const bounds = sel.getSelectionBounds()
+    const cam = this.cb.getCamera()
+    const wp = this.worldAt(e)
+
+    if (bounds) {
+      const layout = handleLayout(bounds, cam)
+      const handle = hitHandle(layout, this.downScreen)
+      if (handle === 'rotate') {
+        this.beginTransform('rotate')
+        this.rotateCenter = boundsCenter(bounds)
+        this.rotateStartAngle = Math.atan2(wp.y - this.rotateCenter.y, wp.x - this.rotateCenter.x)
+        return
+      }
+      if (handle) {
+        this.beginTransform('scale')
+        this.scaleAnchor = layout.worldCorners[oppositeCorner(handle)]
+        this.scaleStartDist =
+          Math.hypot(wp.x - this.scaleAnchor.x, wp.y - this.scaleAnchor.y) || 1
+        return
+      }
+      // Inside the selection box -> move.
+      if (
+        wp.x >= bounds.minX &&
+        wp.x <= bounds.maxX &&
+        wp.y >= bounds.minY &&
+        wp.y <= bounds.maxY
+      ) {
+        this.beginTransform('move')
+        this.moveStart = wp
+        return
+      }
+    }
+    // Otherwise start a marquee (may resolve to a tap-select on release).
+    this.selectAction = 'marquee'
+  }
+
+  private beginTransform(action: Exclude<SelectAction, 'marquee' | null>): void {
+    const sel = this.cb.select
+    this.selectAction = action
+    this.snapshot = sel.getElements()
+    this.snapshotIds = new Set(sel.getSelectedIds())
+    sel.beginInteraction()
+  }
+
+  private applyMatrix(m: Matrix): void {
+    const next = this.snapshot.map((el) =>
+      this.snapshotIds.has(el.id) ? applyMatrixToElement(el, m) : el,
+    )
+    this.cb.select.previewElements(next)
+  }
+
+  private onSelectMove(e: PointerEvent): void {
+    const p = this.localPoint(e)
+    if (Math.hypot(p.x - this.downScreen.x, p.y - this.downScreen.y) > TAP_THRESHOLD) {
+      this.moved = true
+    }
+    const wp = this.worldAt(e)
+
+    switch (this.selectAction) {
+      case 'move':
+        this.applyMatrix(translation(wp.x - this.moveStart.x, wp.y - this.moveStart.y))
+        break
+      case 'scale': {
+        const dist = Math.hypot(wp.x - this.scaleAnchor.x, wp.y - this.scaleAnchor.y)
+        const factor = Math.max(0.05, dist / this.scaleStartDist)
+        this.applyMatrix(scaleAbout(factor, this.scaleAnchor))
+        break
+      }
+      case 'rotate': {
+        const angle = Math.atan2(wp.y - this.rotateCenter.y, wp.x - this.rotateCenter.x)
+        this.applyMatrix(rotateAbout(angle - this.rotateStartAngle, this.rotateCenter))
+        break
+      }
+      case 'marquee':
+        this.cb.select.onMarquee(this.rectFrom(this.downScreen, p))
+        break
+    }
+  }
+
+  private onSelectUp(e: PointerEvent): void {
+    const sel = this.cb.select
+    const action = this.selectAction
+    this.selectPointerId = null
+    this.selectAction = null
+
+    if (action === 'marquee') {
+      sel.onMarquee(null)
+      if (this.moved) {
+        const cam = this.cb.getCamera()
+        const a = screenToWorld(cam, this.downScreen.x, this.downScreen.y)
+        const b = this.worldAt(e)
+        const rect: Bounds = {
+          minX: Math.min(a.x, b.x),
+          minY: Math.min(a.y, b.y),
+          maxX: Math.max(a.x, b.x),
+          maxY: Math.max(a.y, b.y),
+        }
+        sel.setSelection(elementsInRect(sel.getElements(), rect))
+      } else {
+        // tap: select topmost element under the cursor, or clear.
+        const cam = this.cb.getCamera()
+        const wp = this.worldAt(e)
+        const tol = 6 / cam.zoom
+        const id = hitTest(sel.getElements(), wp.x, wp.y, tol)
+        if (id) sel.setSelection([id])
+        else sel.clearSelection()
+      }
+      return
+    }
+
+    if (action === 'move' || action === 'scale' || action === 'rotate') {
+      sel.endInteraction()
+    }
+  }
+
+  private cancelSelectAction(): void {
+    if (this.selectAction && this.selectAction !== 'marquee') {
+      this.cb.select.endInteraction()
+    }
+    this.cb.select.onMarquee(null)
+    this.selectAction = null
+    this.selectPointerId = null
+  }
+
+  private rectFrom(a: Point, b: Point): ScreenRect {
+    return {
+      x: Math.min(a.x, b.x),
+      y: Math.min(a.y, b.y),
+      w: Math.abs(a.x - b.x),
+      h: Math.abs(a.y - b.y),
+    }
+  }
+
+  // --- two-finger gesture (works in both modes) ---
   private twoTouchPoints(): [ActivePointer, ActivePointer] | null {
     const touches = [...this.pointers.values()].filter((p) => p.type === 'touch')
     if (touches.length < 2) return null
@@ -213,13 +402,11 @@ export class PointerController {
     const [a, b] = pair
     const dist = Math.hypot(b.x - a.x, b.y - a.y)
     const angle = Math.atan2(b.y - a.y, b.x - a.x)
-    const centroid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
     this.gesture = {
       ids: [a.id, b.id],
       startDist: dist || 1,
       startAngle: angle,
-      startCentroid: centroid,
-      lastCentroid: centroid,
+      lastCentroid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
     }
   }
 
@@ -233,17 +420,9 @@ export class PointerController {
     const centroid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
 
     let cam = this.cb.getCamera()
-    // pan by centroid delta
-    const dx = centroid.x - this.gesture.lastCentroid.x
-    const dy = centroid.y - this.gesture.lastCentroid.y
-    cam = panBy(cam, dx, dy)
-    // zoom by distance ratio (relative to last frame)
-    const prevDist = this.gesture.startDist
-    const factor = dist / prevDist
-    cam = zoomAt(cam, factor, centroid)
-    // rotate by angle delta
-    const dAngle = angle - this.gesture.startAngle
-    cam = rotateAt(cam, dAngle, centroid)
+    cam = panBy(cam, centroid.x - this.gesture.lastCentroid.x, centroid.y - this.gesture.lastCentroid.y)
+    cam = zoomAt(cam, dist / this.gesture.startDist, centroid)
+    cam = rotateAt(cam, angle - this.gesture.startAngle, centroid)
 
     this.cb.setCamera(cam)
     this.gesture.startDist = dist
@@ -251,3 +430,6 @@ export class PointerController {
     this.gesture.lastCentroid = centroid
   }
 }
+
+// Re-export for callers that position handles (renderer overlay).
+export { worldToScreen }

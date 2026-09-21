@@ -30,12 +30,27 @@ export interface StoreState {
   doc: SketchDocument
   activeLayerId: string
   tool: ToolState
+  /** 'draw' uses brushes; 'select' enables the selection/transform tool. */
+  mode: 'draw' | 'select'
+  /** Ids of currently selected elements (UI state; not undoable). */
+  selectedIds: string[]
   /** Per-layer version counter; bumped whenever that layer's content changes. */
   layerVersion: Record<string, number>
   past: HistoryEntry[]
   future: HistoryEntry[]
   /** Bumps whenever the document is persisted, so autosave can debounce cleanly. */
   dirty: boolean
+
+  // --- mode & selection (not undoable) ---
+  setMode: (mode: 'draw' | 'select') => void
+  setSelection: (ids: string[]) => void
+  clearSelection: () => void
+  deleteSelection: () => void
+
+  // --- live transform (single undoable step per gesture) ---
+  beginInteraction: () => void
+  previewElements: (elements: Element[]) => void
+  endInteraction: () => void
 
   // --- tool actions (not undoable) ---
   setTool: (tool: BrushType) => void
@@ -103,6 +118,16 @@ function touchedLayers(doc: SketchDocument, patches: Patch[]): Set<string> {
 }
 
 export const useStore = create<StoreState>((set, get) => {
+  // Snapshot of elements captured at the start of a transform gesture, so the
+  // whole gesture collapses into one undoable step on release.
+  let interactionBaseline: Element[] | null = null
+
+  const bumpAll = (base: Record<string, number>, doc: SketchDocument) => {
+    const next = { ...base }
+    doc.layers.forEach((l) => (next[l.id] = (next[l.id] ?? 0) + 1))
+    return next
+  }
+
   /** Apply an undoable recipe to `doc`, recording inverse patches for undo. */
   const commit = (recipe: (draft: SketchDocument) => void, bumpAllLayers = true) => {
     const state = get()
@@ -130,12 +155,49 @@ export const useStore = create<StoreState>((set, get) => {
     doc: createDocument(),
     activeLayerId: '',
     tool: defaultTool(),
+    mode: 'draw',
+    selectedIds: [],
     layerVersion: {},
     past: [],
     future: [],
     dirty: false,
 
-    setTool: (tool) => set((s) => ({ tool: { ...s.tool, tool } })),
+    setMode: (mode) => set((s) => ({ mode, selectedIds: mode === 'draw' ? [] : s.selectedIds })),
+    setSelection: (ids) => set({ selectedIds: ids }),
+    clearSelection: () => set({ selectedIds: [] }),
+    deleteSelection: () => {
+      const ids = get().selectedIds
+      if (ids.length === 0) return
+      const idset = new Set(ids)
+      commit((d) => {
+        d.elements = d.elements.filter((e) => !idset.has(e.id))
+      })
+      set({ selectedIds: [] })
+    },
+
+    beginInteraction: () => {
+      interactionBaseline = get().doc.elements
+    },
+    previewElements: (elements) =>
+      set((s) => ({
+        doc: { ...s.doc, elements, updatedAt: Date.now() },
+        layerVersion: bumpAll(s.layerVersion, s.doc),
+        dirty: true,
+      })),
+    endInteraction: () => {
+      const baseline = interactionBaseline
+      interactionBaseline = null
+      if (!baseline) return
+      const current = get().doc.elements
+      if (current === baseline) return
+      const patches = [{ op: 'replace' as const, path: ['elements'], value: current }]
+      const inverse = [{ op: 'replace' as const, path: ['elements'], value: baseline }]
+      const past = [...get().past, { patches, inverse }]
+      if (past.length > HISTORY_LIMIT) past.shift()
+      set({ past, future: [] })
+    },
+
+    setTool: (tool) => set((s) => ({ tool: { ...s.tool, tool }, mode: 'draw', selectedIds: [] })),
     setColor: (color) =>
       set((s) => {
         const recent = [color, ...s.tool.recentColors.filter((c) => c !== color)].slice(0, 8)
@@ -269,6 +331,7 @@ export const useStore = create<StoreState>((set, get) => {
         past: [],
         future: [],
         dirty: false,
+        selectedIds: [],
       })
     },
     newDocument: () => {

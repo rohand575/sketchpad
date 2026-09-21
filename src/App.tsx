@@ -3,10 +3,12 @@ import { useStore } from '@/store/store'
 import { EditorShell } from '@/ui/EditorShell'
 import { getLastDocId, loadDocument, saveDocument, rememberLastDoc } from '@/persistence/db'
 import { createDocument } from '@/model/factory'
+import { useCloud } from '@/hooks/useCloud'
 
 export default function App() {
   const loadDoc = useStore((s) => s.loadDocument)
   const [ready, setReady] = useState(false)
+  useCloud()
 
   useEffect(() => {
     let cancelled = false

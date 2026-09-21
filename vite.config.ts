@@ -3,9 +3,10 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'node:path'
 
-// For GitHub Pages project sites the app is served from /<repo>/.
-// Override at build time with:  VITE_BASE=/your-repo/ npm run build
-const base = process.env.VITE_BASE ?? '/sketchpad/'
+// Served from the root because the site uses a custom domain
+// (sketchpad.rohan-dhanawade.de). For a project-pages URL instead, build with:
+//   VITE_BASE=/sketchpad/ npm run build
+const base = process.env.VITE_BASE ?? '/'
 
 export default defineConfig({
   base,

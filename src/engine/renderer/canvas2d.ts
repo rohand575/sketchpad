@@ -2,7 +2,10 @@ import type { Camera, Layer, SketchDocument, StrokeElement } from '@/model/types
 import { BRUSH_PRESETS } from '@/engine/brushes/presets'
 import { liveOutline, outlineToPath, strokeOutline } from '@/engine/brushes/stroke'
 import { boundsFromPoints } from '@/model/factory'
+import { handleLayout } from '@/engine/selection'
 import type { IRenderer, LiveStroke, RenderInput } from './types'
+
+const ACCENT = '#7c5cff'
 
 interface LayerCache {
   canvas: HTMLCanvasElement
@@ -173,6 +176,70 @@ export class Canvas2DRenderer implements IRenderer {
         if (!alive.has(id)) this.layerCaches.delete(id)
       }
     }
+
+    this.drawOverlay(ctx, input)
+  }
+
+  /** Selection box + transform handles + marquee, drawn in CSS pixels. */
+  private drawOverlay(ctx: CanvasRenderingContext2D, input: RenderInput): void {
+    const { selectionBounds, marquee, camera, dpr } = input
+    if (!selectionBounds && !marquee) return
+    ctx.save()
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+    if (marquee) {
+      ctx.strokeStyle = ACCENT
+      ctx.fillStyle = 'rgba(124, 92, 255, 0.12)'
+      ctx.lineWidth = 1
+      ctx.setLineDash([5, 4])
+      ctx.fillRect(marquee.x, marquee.y, marquee.w, marquee.h)
+      ctx.strokeRect(marquee.x, marquee.y, marquee.w, marquee.h)
+      ctx.setLineDash([])
+    }
+
+    if (selectionBounds) {
+      const l = handleLayout(selectionBounds, camera)
+      const c = l.corners
+      ctx.strokeStyle = ACCENT
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.moveTo(c.nw.x, c.nw.y)
+      ctx.lineTo(c.ne.x, c.ne.y)
+      ctx.lineTo(c.se.x, c.se.y)
+      ctx.lineTo(c.sw.x, c.sw.y)
+      ctx.closePath()
+      ctx.stroke()
+
+      // rotate stalk + knob
+      ctx.beginPath()
+      ctx.moveTo(l.rotateAnchor.x, l.rotateAnchor.y)
+      ctx.lineTo(l.rotate.x, l.rotate.y)
+      ctx.stroke()
+      this.knob(ctx, l.rotate.x, l.rotate.y, 6, true)
+
+      // corner scale handles
+      for (const k of ['nw', 'ne', 'se', 'sw'] as const) {
+        this.knob(ctx, c[k].x, c[k].y, 5, false)
+      }
+    }
+    ctx.restore()
+  }
+
+  private knob(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    r: number,
+    round: boolean,
+  ): void {
+    ctx.fillStyle = '#ffffff'
+    ctx.strokeStyle = ACCENT
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    if (round) ctx.arc(x, y, r, 0, Math.PI * 2)
+    else ctx.rect(x - r, y - r, r * 2, r * 2)
+    ctx.fill()
+    ctx.stroke()
   }
 
   exportToCanvas(doc: SketchDocument, scale = 1): HTMLCanvasElement {

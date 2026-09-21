@@ -1,10 +1,10 @@
-// Firebase integration is *scaffolded but inert* until you provide config via
-// .env.local (see .env.example). When keys are absent the whole app runs
-// fully local — no network, no errors, cloud UI stays hidden.
-//
-// v2 will lazy-import the Firebase SDK here and wire Google auth + Firestore
-// document sync + Storage. Kept dependency-free for now so the local MVP has a
-// zero-weight, zero-error cloud boundary.
+// Firebase integration. The SDK is *lazy-loaded* — nothing is imported unless
+// valid config exists in .env.local (see .env.example). With no config the app
+// runs fully local: no network, no bundle weight, no errors.
+
+import type { FirebaseApp } from 'firebase/app'
+import type { Auth } from 'firebase/auth'
+import type { Firestore } from 'firebase/firestore'
 
 export interface FirebaseConfig {
   apiKey: string
@@ -13,6 +13,12 @@ export interface FirebaseConfig {
   storageBucket: string
   messagingSenderId: string
   appId: string
+}
+
+export interface FirebaseServices {
+  app: FirebaseApp
+  auth: Auth
+  db: Firestore
 }
 
 export function readFirebaseConfig(): FirebaseConfig | null {
@@ -25,9 +31,34 @@ export function readFirebaseConfig(): FirebaseConfig | null {
     messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID ?? '',
     appId: env.VITE_FIREBASE_APP_ID ?? '',
   }
-  const configured = cfg.apiKey && cfg.projectId && cfg.appId
-  return configured ? cfg : null
+  return cfg.apiKey && cfg.projectId && cfg.appId ? cfg : null
 }
 
 /** Whether cloud features (sign-in, sync) should be surfaced in the UI. */
 export const isCloudEnabled = (): boolean => readFirebaseConfig() !== null
+
+let cached: Promise<FirebaseServices | null> | null = null
+
+/** Initialize Firebase once (or return null if not configured). */
+export function getFirebase(): Promise<FirebaseServices | null> {
+  if (cached) return cached
+  const cfg = readFirebaseConfig()
+  if (!cfg) {
+    cached = Promise.resolve(null)
+    return cached
+  }
+  cached = (async () => {
+    const { initializeApp } = await import('firebase/app')
+    const { getAuth } = await import('firebase/auth')
+    const { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } =
+      await import('firebase/firestore')
+    const app = initializeApp(cfg)
+    const auth = getAuth(app)
+    // Offline persistence: Firestore caches to IndexedDB and syncs on reconnect.
+    const db = initializeFirestore(app, {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    })
+    return { app, auth, db }
+  })()
+  return cached
+}

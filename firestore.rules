@@ -1,0 +1,11 @@
+rules_version = '2';
+
+// Each user can only read/write documents under their own uid.
+// Paste these into Firebase Console -> Firestore Database -> Rules.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

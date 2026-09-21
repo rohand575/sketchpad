@@ -1,16 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '@/store/store'
 import { IconButton, Panel } from './primitives'
-import {
-  CloudIcon,
-  DownloadIcon,
-  HomeIcon,
-  LayersIcon,
-  RedoIcon,
-  UndoIcon,
-} from './icons'
+import { DownloadIcon, HomeIcon, LayersIcon, RedoIcon, UndoIcon } from './icons'
 import { exportImage, exportJSON } from '@/persistence/exporter'
 import { isCloudEnabled } from '@/services/firebase'
+import { CloudMenu } from './CloudMenu'
 
 export function TopBar({
   touch,
@@ -112,11 +106,7 @@ export function TopBar({
           )}
         </div>
 
-        {cloud && (
-          <IconButton className={btn} label="Cloud (sign in)" disabled>
-            <CloudIcon />
-          </IconButton>
-        )}
+        {cloud && <CloudMenu touch={touch} />}
       </Panel>
     </div>
   )

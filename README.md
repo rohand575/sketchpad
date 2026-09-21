@@ -15,6 +15,10 @@ feel like a real drawing tool — not a website.
 - 🖊️ **Pressure-sensitive** stylus input (Pointer Events + `perfect-freehand`);
   velocity-simulated pressure for mouse/trackpad
 - 🗂️ **Layers** — add / reorder / rename / opacity / visibility / delete
+- 🎯 **Selection & transform** — tap or box-select strokes, then move / scale /
+  rotate / delete (undoable)
+- ☁️ **Cloud sync + Google sign-in** — start on your laptop, continue on your
+  tablet (optional; enabled once Firebase is configured)
 - ↩️ **Undo / redo** (patch-based history)
 - 🔍 **Infinite canvas**: zoom, pan, and rotate
   - Desktop: `Ctrl`/pinch to zoom, wheel/space-drag to pan
@@ -71,11 +75,43 @@ npm run preview  # preview the production build (works offline)
 | Key | Action |
 | --- | --- |
 | `B` / `P` / `M` / `E` | Pen / Pencil / Marker / Eraser |
+| `V` | Selection tool |
 | `[` / `]` | Decrease / increase brush size |
+| `Delete` / `Backspace` | Delete selection |
+| `Esc` | Clear selection |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z` / `Ctrl+Y` | Redo |
 | `Space` + drag | Pan |
 | `Ctrl` + scroll | Zoom |
+
+## Selection & transform
+
+Pick the **Selection** tool (arrow icon, or press `V`). Then:
+
+- **Tap/click** a stroke to select it; **drag on empty canvas** to box-select
+  many.
+- **Drag inside** the selection box to move; drag a **corner** to scale; drag
+  the **round handle** above the box to rotate.
+- **Delete** removes the selection (or use the on-screen bar on touch devices).
+
+All transforms are a single undoable step.
+
+## Cloud sync & Google sign-in
+
+Configure Firebase (below) and a **Sign in** button appears in the top bar.
+After signing in with Google:
+
+- Your whole local library is **reconciled** with the cloud (newest copy wins),
+  so every device converges to the same set of sketches.
+- The open document **syncs live** — edits are pushed (debounced) and a newer
+  copy from another device is pulled automatically. Start on your laptop, pick
+  up on your tablet.
+- Firestore's **offline persistence** means edits made offline sync when you
+  reconnect.
+
+Data lives under `users/{uid}/documents/{docId}` with one element per stroke.
+Lock it down with the included [`firestore.rules`](firestore.rules) (paste into
+Firestore Console → Rules).
 
 ## Deploying to GitHub Pages
 
@@ -121,9 +157,12 @@ until you add Firebase keys. To prepare for Google sign-in + cross-device sync:
 
 `.env.local` is gitignored — keys never get committed.
 
-## Roadmap (v2+)
+## Roadmap (next)
 
-Google auth + Firestore document sync + offline reconciliation · shapes · text ·
-image import · element selection & transform · AI assists (shape cleanup,
-handwriting recognition). The data model and renderer are already structured for
-these.
+Shapes · text · image import · precise per-stroke selection & grouping · AI
+assists (shape cleanup, handwriting recognition). The data model and renderer
+are already structured for these.
+
+Done: freehand drawing, brushes, layers, undo/redo, infinite canvas,
+offline-first persistence, export, PWA, **selection & transform**, and
+**cloud sync + Google sign-in**.

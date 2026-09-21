@@ -1,4 +1,12 @@
-import type { BrushType, Camera, SketchDocument, StrokePoint } from '@/model/types'
+import type { Bounds, BrushType, Camera, SketchDocument, StrokePoint } from '@/model/types'
+
+/** Screen-space (CSS px) rectangle for the box-select marquee. */
+export interface ScreenRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
 
 /** A stroke currently being drawn (not yet committed to the document). */
 export interface LiveStroke {
@@ -20,6 +28,10 @@ export interface RenderInput {
   /** Per-layer content version; a change invalidates that layer's cache. */
   layerVersion: Record<string, number>
   live: LiveStroke | null
+  /** World-space bounds of the current selection (draws box + handles). */
+  selectionBounds: Bounds | null
+  /** In-progress box-select marquee (screen CSS px). */
+  marquee: ScreenRect | null
 }
 
 /**
