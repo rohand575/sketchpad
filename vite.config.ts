@@ -21,6 +21,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icons/*.png'],
       manifest: {
+        id: '/',
+        start_url: '/',
+        scope: '/',
         name: 'Sketchpad',
         short_name: 'Sketchpad',
         description: 'A modern, premium cross-platform drawing and sketching app.',

@@ -15,15 +15,25 @@
     overflow: hidden;
   }
 
+  /* Use the dynamic viewport height so mobile browser chrome (address bar)
+     doesn't clip the canvas or leave a dead gap. Falls back to vh. */
+  #root {
+    height: 100vh;
+    height: 100dvh;
+  }
+
   body {
     font-family: 'Inter', system-ui, sans-serif;
     background: #0b0b0f;
     /* Prevent iOS/Android rubber-banding and text selection while drawing. */
     overscroll-behavior: none;
+    touch-action: none;
     -webkit-user-select: none;
     user-select: none;
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
+    position: fixed;
+    inset: 0;
   }
 }
 

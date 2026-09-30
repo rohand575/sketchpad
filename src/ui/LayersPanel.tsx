@@ -15,7 +15,7 @@ export function LayersPanel({ onClose }: { onClose: () => void }) {
   const ordered = [...layers].sort((a, b) => b.order - a.order)
 
   return (
-    <Panel className="flex w-72 flex-col">
+    <Panel className="flex w-72 max-w-[92vw] flex-col">
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
         <span className="text-sm font-medium text-white/80">Layers</span>
         <div className="flex items-center gap-1">

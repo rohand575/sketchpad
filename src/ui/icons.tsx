@@ -113,6 +113,14 @@ export const SelectIcon = (p: SVGProps<SVGSVGElement>) => (
   </svg>
 )
 
+export const MoreIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <circle cx="5" cy="12" r="1.6" />
+    <circle cx="12" cy="12" r="1.6" />
+    <circle cx="19" cy="12" r="1.6" />
+  </svg>
+)
+
 export const GoogleIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg width={18} height={18} viewBox="0 0 24 24" {...p}>
     <path

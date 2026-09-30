@@ -13,7 +13,13 @@ const TOOLS: { type: BrushType; Icon: typeof PenIcon; label: string; key: string
   { type: 'eraser', Icon: EraserIcon, label: 'Eraser', key: 'E' },
 ]
 
-export function Toolbar({ touch }: { touch: boolean }) {
+export function Toolbar({
+  touch,
+  orientation = 'vertical',
+}: {
+  touch: boolean
+  orientation?: 'vertical' | 'horizontal'
+}) {
   const tool = useStore((s) => s.tool.tool)
   const mode = useStore((s) => s.mode)
   const color = useStore((s) => s.tool.color)
@@ -32,16 +38,28 @@ export function Toolbar({ touch }: { touch: boolean }) {
     return () => window.removeEventListener('pointerdown', onDown)
   }, [popover])
 
-  const btn = touch ? 'h-14 w-14' : 'h-11 w-11'
-  const iconSize = touch ? 26 : 22
+  const horizontal = orientation === 'horizontal'
+  const btn = horizontal ? 'h-12 w-12' : touch ? 'h-14 w-14' : 'h-11 w-11'
+  const iconSize = horizontal ? 24 : touch ? 26 : 22
+  const divider = horizontal ? 'mx-0.5 h-7 w-px bg-white/10' : 'my-1 h-px w-7 bg-white/10'
+  const popoverPos = horizontal
+    ? 'bottom-full left-1/2 mb-3 -translate-x-1/2'
+    : 'left-full top-0 ml-3'
 
   return (
     <div ref={ref} className="pointer-events-auto relative">
-      <Panel className="flex flex-col items-center gap-1 p-2">
+      <Panel
+        className={
+          (horizontal
+            ? 'flex flex-row items-center gap-1 p-1.5'
+            : 'flex flex-col items-center gap-1 p-2') +
+          (horizontal ? ' max-w-[96vw] overflow-x-auto' : '')
+        }
+      >
         {TOOLS.map(({ type, Icon, label, key }) => (
           <IconButton
             key={type}
-            className={btn}
+            className={`${btn} shrink-0`}
             active={mode === 'draw' && tool === type}
             label={touch ? label : `${label} (${key})`}
             onClick={() => {
@@ -53,10 +71,10 @@ export function Toolbar({ touch }: { touch: boolean }) {
           </IconButton>
         ))}
 
-        <div className="my-1 h-px w-7 bg-white/10" />
+        <div className={divider} />
 
         <IconButton
-          className={btn}
+          className={`${btn} shrink-0`}
           active={mode === 'select'}
           label={touch ? 'Select' : 'Select (V)'}
           onClick={() => {
@@ -67,11 +85,11 @@ export function Toolbar({ touch }: { touch: boolean }) {
           <SelectIcon width={iconSize} height={iconSize} />
         </IconButton>
 
-        <div className="my-1 h-px w-7 bg-white/10" />
+        <div className={divider} />
 
         {/* Color swatch */}
         <button
-          className={`${btn} flex items-center justify-center rounded-xl hover:bg-white/10`}
+          className={`${btn} flex shrink-0 items-center justify-center rounded-xl hover:bg-white/10`}
           title="Color"
           aria-label="Color"
           onClick={() => setPopover(popover === 'color' ? null : 'color')}
@@ -84,21 +102,24 @@ export function Toolbar({ touch }: { touch: boolean }) {
 
         {/* Brush size / opacity */}
         <button
-          className={`${btn} flex flex-col items-center justify-center rounded-xl hover:bg-white/10`}
+          className={`${btn} flex shrink-0 flex-col items-center justify-center rounded-xl hover:bg-white/10`}
           title="Brush settings"
           aria-label="Brush settings"
           onClick={() => setPopover(popover === 'brush' ? null : 'brush')}
         >
           <span
             className="rounded-full bg-white/90"
-            style={{ width: Math.min(22, Math.max(3, size)), height: Math.min(22, Math.max(3, size)) }}
+            style={{
+              width: Math.min(22, Math.max(3, size)),
+              height: Math.min(22, Math.max(3, size)),
+            }}
           />
-          <span className="mt-1 font-mono text-[10px] text-white/50">{size}</span>
+          <span className="mt-0.5 font-mono text-[10px] text-white/50">{size}</span>
         </button>
       </Panel>
 
       {popover && (
-        <div className="absolute left-full top-0 z-30 ml-3">
+        <div className={`absolute z-30 ${popoverPos}`}>
           <Panel>{popover === 'color' ? <ColorPicker /> : <BrushControls />}</Panel>
         </div>
       )}
