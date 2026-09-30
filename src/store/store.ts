@@ -5,9 +5,9 @@ import {
   enablePatches,
   type Patch,
 } from 'immer'
-import type { BrushType, Element, Layer, SketchDocument, Camera } from '@/model/types'
-import { BRUSH_PRESETS } from '@/engine/brushes/presets'
-import { createDocument, createLayer } from '@/model/factory'
+import type { Element, Layer, SketchDocument, Camera } from '@/model/types'
+import { BRUSHES, DEFAULT_BRUSH_ID } from '@/engine/brushes/library'
+import { createDocument, createLayer, migrateDocument } from '@/model/factory'
 
 enablePatches()
 
@@ -19,11 +19,11 @@ interface HistoryEntry {
 }
 
 interface ToolState {
-  tool: BrushType
+  brushId: string
   color: string
   recentColors: string[]
-  sizes: Record<BrushType, number>
-  opacities: Record<BrushType, number>
+  sizes: Record<string, number>
+  opacities: Record<string, number>
 }
 
 export interface StoreState {
@@ -53,7 +53,7 @@ export interface StoreState {
   endInteraction: () => void
 
   // --- tool actions (not undoable) ---
-  setTool: (tool: BrushType) => void
+  setBrush: (brushId: string) => void
   setColor: (color: string) => void
   setBrushSize: (size: number) => void
   setBrushOpacity: (opacity: number) => void
@@ -89,32 +89,19 @@ export interface StoreState {
 }
 
 function defaultTool(): ToolState {
-  const sizes = {} as Record<BrushType, number>
-  const opacities = {} as Record<BrushType, number>
-  ;(Object.keys(BRUSH_PRESETS) as BrushType[]).forEach((t) => {
-    sizes[t] = BRUSH_PRESETS[t].defaultSize
-    opacities[t] = BRUSH_PRESETS[t].defaultOpacity
+  const sizes: Record<string, number> = {}
+  const opacities: Record<string, number> = {}
+  BRUSHES.forEach((b) => {
+    sizes[b.id] = b.size
+    opacities[b.id] = b.opacity
   })
   return {
-    tool: 'pen',
+    brushId: DEFAULT_BRUSH_ID,
     color: '#111827',
     recentColors: ['#111827', '#ef4444', '#3b82f6', '#22c55e', '#f59e0b'],
     sizes,
     opacities,
   }
-}
-
-/** Which layers a set of patches touched (so the renderer can invalidate caches). */
-function touchedLayers(doc: SketchDocument, patches: Patch[]): Set<string> {
-  const layers = new Set<string>()
-  for (const p of patches) {
-    if (p.path[0] === 'elements') {
-      // We can't cheaply resolve which element/layer without scanning; bump all.
-      doc.layers.forEach((l) => layers.add(l.id))
-      break
-    }
-  }
-  return layers
 }
 
 export const useStore = create<StoreState>((set, get) => {
@@ -128,8 +115,13 @@ export const useStore = create<StoreState>((set, get) => {
     return next
   }
 
-  /** Apply an undoable recipe to `doc`, recording inverse patches for undo. */
-  const commit = (recipe: (draft: SketchDocument) => void, bumpAllLayers = true) => {
+  /**
+   * Apply an undoable recipe to `doc`, recording inverse patches for undo.
+   * `affected` limits which layer caches are invalidated (defaults to all) —
+   * bumping only the drawn layer keeps the WebGL engine from re-baking every
+   * layer on each stroke.
+   */
+  const commit = (recipe: (draft: SketchDocument) => void, affected?: string[]) => {
     const state = get()
     const [nextDoc, patches, inverse] = produceWithPatches(state.doc, (draft) => {
       recipe(draft)
@@ -138,12 +130,10 @@ export const useStore = create<StoreState>((set, get) => {
     if (patches.length === 0) return
 
     const layerVersion = { ...state.layerVersion }
-    const layers = bumpAllLayers
-      ? new Set(nextDoc.layers.map((l) => l.id))
-      : touchedLayers(nextDoc, patches)
-    layers.forEach((id) => {
+    const layers = affected ?? nextDoc.layers.map((l) => l.id)
+    for (const id of layers) {
       layerVersion[id] = (layerVersion[id] ?? 0) + 1
-    })
+    }
 
     const past = [...state.past, { patches, inverse }]
     if (past.length > HISTORY_LIMIT) past.shift()
@@ -197,41 +187,48 @@ export const useStore = create<StoreState>((set, get) => {
       set({ past, future: [] })
     },
 
-    setTool: (tool) => set((s) => ({ tool: { ...s.tool, tool }, mode: 'draw', selectedIds: [] })),
+    setBrush: (brushId) =>
+      set((s) => ({ tool: { ...s.tool, brushId }, mode: 'draw', selectedIds: [] })),
     setColor: (color) =>
       set((s) => {
         const recent = [color, ...s.tool.recentColors.filter((c) => c !== color)].slice(0, 8)
         return { tool: { ...s.tool, color, recentColors: recent } }
       }),
     setBrushSize: (size) =>
-      set((s) => ({ tool: { ...s.tool, sizes: { ...s.tool.sizes, [s.tool.tool]: size } } })),
+      set((s) => ({ tool: { ...s.tool, sizes: { ...s.tool.sizes, [s.tool.brushId]: size } } })),
     setBrushOpacity: (opacity) =>
       set((s) => ({
-        tool: { ...s.tool, opacities: { ...s.tool.opacities, [s.tool.tool]: opacity } },
+        tool: { ...s.tool, opacities: { ...s.tool.opacities, [s.tool.brushId]: opacity } },
       })),
     activeSize: () => {
       const s = get()
-      return s.tool.sizes[s.tool.tool]
+      return s.tool.sizes[s.tool.brushId]
     },
     activeOpacity: () => {
       const s = get()
-      return s.tool.opacities[s.tool.tool]
+      return s.tool.opacities[s.tool.brushId]
     },
 
     setCamera: (camera) =>
       set((s) => ({ doc: { ...s.doc, camera } })),
 
-    addElement: (element) => commit((d) => void d.elements.push(element)),
-    removeElements: (ids) =>
+    addElement: (element) => commit((d) => void d.elements.push(element), [element.layerId]),
+    removeElements: (ids) => {
+      const idset = new Set(ids)
+      const affected = [
+        ...new Set(get().doc.elements.filter((e) => idset.has(e.id)).map((e) => e.layerId)),
+      ]
       commit((d) => {
-        const set2 = new Set(ids)
-        d.elements = d.elements.filter((e) => !set2.has(e.id))
-      }),
-    updateElement: (id, patch) =>
+        d.elements = d.elements.filter((e) => !idset.has(e.id))
+      }, affected)
+    },
+    updateElement: (id, patch) => {
+      const el = get().doc.elements.find((e) => e.id === id)
       commit((d) => {
-        const el = d.elements.find((e) => e.id === id)
-        if (el) Object.assign(el, patch)
-      }),
+        const target = d.elements.find((e) => e.id === id)
+        if (target) Object.assign(target, patch)
+      }, el ? [el.layerId] : undefined)
+    },
 
     setActiveLayer: (layerId) => set({ activeLayerId: layerId }),
 
@@ -319,7 +316,8 @@ export const useStore = create<StoreState>((set, get) => {
     canUndo: () => get().past.length > 0,
     canRedo: () => get().future.length > 0,
 
-    loadDocument: (doc) => {
+    loadDocument: (raw) => {
+      const doc = migrateDocument(raw)
       const layerVersion: Record<string, number> = {}
       doc.layers.forEach((l) => (layerVersion[l.id] = 0))
       const sorted = [...doc.layers].sort((a, b) => a.order - b.order)

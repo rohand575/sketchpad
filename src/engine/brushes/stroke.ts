@@ -1,8 +1,7 @@
 import { getStroke } from 'perfect-freehand'
-import type { BrushType, StrokeElement, StrokePoint } from '@/model/types'
-import { BRUSH_PRESETS } from './presets'
+import type { StrokePoint } from '@/model/types'
 
-/** True when the samples carry meaningful pressure variation (i.e. a real stylus). */
+/** True when the samples carry meaningful pressure variation (a real stylus). */
 function hasRealPressure(points: StrokePoint[]): boolean {
   let min = Infinity
   let max = -Infinity
@@ -13,29 +12,20 @@ function hasRealPressure(points: StrokePoint[]): boolean {
   return max - min > 0.01
 }
 
-function buildOutline(points: StrokePoint[], brush: BrushType, size: number): number[][] {
-  const preset = BRUSH_PRESETS[brush]
-  // Use real stylus pressure when present; otherwise let perfect-freehand
-  // simulate pressure from velocity (nice tapering for mouse/trackpad).
-  const simulatePressure = hasRealPressure(points)
-    ? false
-    : (preset.freehand.simulatePressure ?? true)
+/**
+ * Variable-width outline for a stroke. Used by the Canvas2D fallback engine only
+ * (the WebGL engine stamps textured dabs instead).
+ */
+export function strokeOutline(points: StrokePoint[], size: number): number[][] {
+  const simulatePressure = !hasRealPressure(points)
   const input = points.map((p) => [p.x, p.y, p.p] as [number, number, number])
-  return getStroke(input, { size, ...preset.freehand, simulatePressure })
-}
-
-/** Outline polygon for a committed stroke element (world coordinates). */
-export function strokeOutline(el: StrokeElement): number[][] {
-  return buildOutline(el.points, el.brush, el.size)
-}
-
-/** Outline polygon for an in-progress stroke. */
-export function liveOutline(
-  points: StrokePoint[],
-  brush: BrushType,
-  size: number,
-): number[][] {
-  return buildOutline(points, brush, size)
+  return getStroke(input, {
+    size,
+    thinning: 0.6,
+    smoothing: 0.5,
+    streamline: 0.5,
+    simulatePressure,
+  })
 }
 
 /** Build a Path2D from an outline polygon using quadratic smoothing. */

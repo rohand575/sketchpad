@@ -1,14 +1,33 @@
 // Core data model for a Sketchpad document.
-// Everything is stored as vector data in *world* coordinates. The camera maps
-// world -> screen at render time, giving an infinite, resolution-independent canvas.
+//
+// Documents are a *fixed-size* pixel canvas (like Procreate). Strokes are stored
+// as replayable vector commands in document/world coordinates (0,0)..(width,height);
+// the WebGL engine replays them into per-layer raster textures. Keeping strokes as
+// commands (not bitmaps) keeps cloud sync cheap and exports resolution-independent.
 
+/** Legacy brush categories (v1). Retained for migration to brush ids. */
 export type BrushType = 'pen' | 'pencil' | 'marker' | 'eraser'
 
-/** A single sampled input point in world space. `p` is normalized pressure 0..1. */
+/** Layer compositing modes (subset implemented in the composite shader). */
+export type BlendMode =
+  | 'normal'
+  | 'multiply'
+  | 'screen'
+  | 'overlay'
+  | 'darken'
+  | 'lighten'
+  | 'color-dodge'
+  | 'add'
+  | 'soft-light'
+
+/** A single sampled input point in document space. `p` is normalized pressure 0..1. */
 export interface StrokePoint {
   x: number
   y: number
   p: number
+  /** Stylus tilt in degrees along each axis (optional; -90..90). */
+  tx?: number
+  ty?: number
 }
 
 /** Axis-aligned bounding box in world space; cached for hit-testing & dirty regions. */
@@ -28,13 +47,16 @@ interface ElementBase {
 
 export interface StrokeElement extends ElementBase {
   type: 'stroke'
-  brush: BrushType
-  /** CSS color string (ignored for eraser). */
+  /** Brush definition id (see engine/brushes/library.ts). */
+  brushId: string
+  /** CSS color string (ignored for eraser brushes). */
   color: string
-  /** Base brush diameter in world units. */
+  /** Base brush diameter in document units. */
   size: number
-  /** 0..1 */
+  /** 0..1 brush opacity (applied once per whole stroke). */
   opacity: number
+  /** Whether alpha-lock was active when painted (persisted for faithful replay). */
+  alphaLock?: boolean
   points: StrokePoint[]
 }
 
@@ -65,7 +87,6 @@ export interface ImageElement extends ElementBase {
   y: number
   width: number
   height: number
-  /** Reference to a blob stored locally / in cloud storage. */
   src: string
 }
 
@@ -80,6 +101,11 @@ export interface Layer {
   opacity: number
   /** Draw order; lower renders first (below). */
   order: number
+  blendMode: BlendMode
+  /** Clip this layer's paint to the alpha of the content below it. */
+  clipped: boolean
+  /** Restrict painting to already-painted pixels of this layer. */
+  alphaLock: boolean
 }
 
 export interface Camera {
@@ -99,6 +125,11 @@ export interface SketchDocument {
   /** Firebase uid once cloud sync is enabled; undefined while local-only. */
   ownerId?: string
   background: string
+  /** Fixed canvas size in pixels. */
+  width: number
+  height: number
+  /** Dots per inch (for print/export sizing). */
+  dpi: number
   camera: Camera
   layers: Layer[]
   elements: Element[]
@@ -106,4 +137,4 @@ export interface SketchDocument {
   version: number
 }
 
-export const DOCUMENT_VERSION = 1
+export const DOCUMENT_VERSION = 2

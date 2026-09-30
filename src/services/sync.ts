@@ -20,6 +20,7 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import type { Element, SketchDocument } from '@/model/types'
+import { migrateDocument } from '@/model/factory'
 import { useStore } from '@/store/store'
 import { listDocuments, loadDocument as loadLocalDoc, saveDocument } from '@/persistence/db'
 import { makeThumbnail } from '@/persistence/exporter'
@@ -30,6 +31,9 @@ interface RemoteMeta {
   docId: string
   title: string
   background: string
+  width: number
+  height: number
+  dpi: number
   camera: SketchDocument['camera']
   layers: SketchDocument['layers']
   createdAt: number
@@ -43,6 +47,9 @@ function metaFrom(doc: SketchDocument, uid: string): RemoteMeta {
     docId: doc.id,
     title: doc.title,
     background: doc.background,
+    width: doc.width,
+    height: doc.height,
+    dpi: doc.dpi,
     camera: doc.camera,
     layers: doc.layers,
     createdAt: doc.createdAt,
@@ -50,6 +57,25 @@ function metaFrom(doc: SketchDocument, uid: string): RemoteMeta {
     version: doc.version,
     ownerId: uid,
   }
+}
+
+/** Rebuild a full document from remote meta + element docs (migrating if old). */
+function rebuildDoc(docId: string, remote: RemoteMeta, elements: Element[], uid: string): SketchDocument {
+  return migrateDocument({
+    id: docId,
+    title: remote.title,
+    createdAt: remote.createdAt,
+    updatedAt: remote.updatedAt,
+    background: remote.background,
+    width: remote.width ?? 0,
+    height: remote.height ?? 0,
+    dpi: remote.dpi ?? 132,
+    camera: remote.camera,
+    layers: remote.layers,
+    elements,
+    version: remote.version,
+    ownerId: uid,
+  })
 }
 
 function safeThumb(doc: SketchDocument): string | undefined {
@@ -190,18 +216,7 @@ class SyncEngine {
     try {
       const snap = await getDocs(this.paths(this.uid, docId).elements(fb.db))
       const elements = snap.docs.map((d) => d.data() as Element)
-      const rebuilt: SketchDocument = {
-        id: docId,
-        title: remote.title,
-        createdAt: remote.createdAt,
-        updatedAt: remote.updatedAt,
-        background: remote.background,
-        camera: remote.camera,
-        layers: remote.layers,
-        elements,
-        version: remote.version,
-        ownerId: this.uid,
-      }
+      const rebuilt = rebuildDoc(docId, remote, elements, this.uid)
       this.applyingRemote = true
       useStore.getState().loadDocument(rebuilt)
       this.lastPushed = new Map(elements.map((e) => [e.id, e]))
@@ -263,18 +278,7 @@ class SyncEngine {
     if (!fb || !this.uid) return
     const snap = await getDocs(this.paths(this.uid, docId).elements(fb.db))
     const elements = snap.docs.map((d) => d.data() as Element)
-    const rebuilt: SketchDocument = {
-      id: docId,
-      title: remote.title,
-      createdAt: remote.createdAt,
-      updatedAt: remote.updatedAt,
-      background: remote.background,
-      camera: remote.camera,
-      layers: remote.layers,
-      elements,
-      version: remote.version,
-      ownerId: this.uid,
-    }
+    const rebuilt = rebuildDoc(docId, remote, elements, this.uid)
     await saveDocument(rebuilt, safeThumb(rebuilt))
   }
 }

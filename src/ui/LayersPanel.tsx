@@ -1,6 +1,19 @@
 import { useStore } from '@/store/store'
+import type { BlendMode } from '@/model/types'
 import { IconButton, Panel } from './primitives'
 import { EyeIcon, EyeOffIcon, PlusIcon, TrashIcon } from './icons'
+
+const BLEND_MODES: BlendMode[] = [
+  'normal',
+  'multiply',
+  'screen',
+  'overlay',
+  'darken',
+  'lighten',
+  'color-dodge',
+  'add',
+  'soft-light',
+]
 
 export function LayersPanel({ onClose }: { onClose: () => void }) {
   const layers = useStore((s) => s.doc.layers)
@@ -80,6 +93,52 @@ export function LayersPanel({ onClose }: { onClose: () => void }) {
                   <span className="w-8 text-right font-mono text-[10px] text-white/40">
                     {Math.round(layer.opacity * 100)}
                   </span>
+                </div>
+                <div className="mt-1.5 flex items-center gap-1">
+                  <select
+                    value={layer.blendMode}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) =>
+                      updateLayer(layer.id, { blendMode: e.target.value as BlendMode })
+                    }
+                    className="flex-1 rounded-md bg-black/40 px-1.5 py-1 text-[11px] capitalize text-white/80 outline-none"
+                  >
+                    {BLEND_MODES.map((m) => (
+                      <option key={m} value={m}>
+                        {m.replace('-', ' ')}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    title="Alpha lock (paint inside existing pixels)"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      updateLayer(layer.id, { alphaLock: !layer.alphaLock })
+                    }}
+                    className={
+                      'h-6 w-6 rounded-md text-xs ' +
+                      (layer.alphaLock
+                        ? 'bg-white/20 text-white ring-1 ring-white/30'
+                        : 'text-white/40 hover:bg-white/10')
+                    }
+                  >
+                    α
+                  </button>
+                  <button
+                    title="Clipping mask (clip to layer below)"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      updateLayer(layer.id, { clipped: !layer.clipped })
+                    }}
+                    className={
+                      'h-6 w-6 rounded-md text-xs ' +
+                      (layer.clipped
+                        ? 'bg-white/20 text-white ring-1 ring-white/30'
+                        : 'text-white/40 hover:bg-white/10')
+                    }
+                  >
+                    ⧉
+                  </button>
                 </div>
               </div>
 

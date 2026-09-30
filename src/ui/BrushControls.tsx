@@ -1,5 +1,5 @@
 import { useStore } from '@/store/store'
-import { BRUSH_PRESETS } from '@/engine/brushes/presets'
+import { getBrush } from '@/engine/brushes/library'
 
 function Slider({
   label,
@@ -41,21 +41,21 @@ function Slider({
 }
 
 export function BrushControls() {
-  const tool = useStore((s) => s.tool.tool)
-  const size = useStore((s) => s.tool.sizes[s.tool.tool])
-  const opacity = useStore((s) => s.tool.opacities[s.tool.tool])
+  const brushId = useStore((s) => s.tool.brushId)
+  const size = useStore((s) => s.tool.sizes[s.tool.brushId])
+  const opacity = useStore((s) => s.tool.opacities[s.tool.brushId])
   const setSize = useStore((s) => s.setBrushSize)
   const setOpacity = useStore((s) => s.setBrushOpacity)
-  const preset = BRUSH_PRESETS[tool]
+  const brush = getBrush(brushId)
 
   return (
     <div className="w-64 p-4">
-      <div className="mb-3 text-xs uppercase tracking-wide text-white/40">{preset.label}</div>
+      <div className="mb-3 text-xs uppercase tracking-wide text-white/40">{brush.name}</div>
       <Slider
         label="Size"
-        value={size}
-        min={preset.minSize}
-        max={preset.maxSize}
+        value={Math.round(size)}
+        min={brush.minSize}
+        max={brush.maxSize}
         step={1}
         suffix="px"
         onChange={setSize}

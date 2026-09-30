@@ -8,12 +8,13 @@ import {
   saveDocument,
   type DocumentMeta,
 } from '@/persistence/db'
-import { createDocument } from '@/model/factory'
+import { CANVAS_PRESETS, createDocument, type CanvasPreset } from '@/model/factory'
 import { Panel } from './primitives'
 import { PlusIcon, TrashIcon } from './icons'
 
 export function Gallery({ onClose }: { onClose: () => void }) {
   const [docs, setDocs] = useState<DocumentMeta[]>([])
+  const [choosing, setChoosing] = useState(false)
   const loadDoc = useStore((s) => s.loadDocument)
   const currentId = useStore((s) => s.doc.id)
 
@@ -35,8 +36,10 @@ export function Gallery({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const newDoc = async () => {
-    const doc = createDocument()
+  const newDoc = async (preset?: CanvasPreset) => {
+    const doc = createDocument(
+      preset ? { width: preset.width, height: preset.height, dpi: preset.dpi } : {},
+    )
     await saveDocument(doc)
     loadDoc(doc)
     rememberLastDoc(doc.id)
@@ -74,7 +77,7 @@ export function Gallery({ onClose }: { onClose: () => void }) {
 
         <div className="grid grid-cols-2 gap-4 overflow-y-auto p-6 sm:grid-cols-3 md:grid-cols-4">
           <button
-            onClick={newDoc}
+            onClick={() => setChoosing(true)}
             className="group flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-white/20 text-white/50 transition-colors hover:border-white/40 hover:bg-white/5 hover:text-white"
           >
             <PlusIcon width={32} height={32} />
@@ -121,6 +124,39 @@ export function Gallery({ onClose }: { onClose: () => void }) {
           ))}
         </div>
       </Panel>
+
+      {choosing && (
+        <div
+          className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 p-6"
+          onClick={() => setChoosing(false)}
+        >
+          <Panel className="w-full max-w-md p-5" >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-base font-semibold text-white/90">New canvas</h2>
+              <button
+                onClick={() => setChoosing(false)}
+                className="text-sm text-white/50 hover:text-white"
+              >
+                Cancel
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3" onClick={(e) => e.stopPropagation()}>
+              {CANVAS_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => newDoc(p)}
+                  className="rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-left transition-colors hover:border-white/30 hover:bg-white/5"
+                >
+                  <div className="text-sm text-white/90">{p.label}</div>
+                  <div className="mt-0.5 font-mono text-xs text-white/40">
+                    {p.width}×{p.height} · {p.dpi}dpi
+                  </div>
+                </button>
+              ))}
+            </div>
+          </Panel>
+        </div>
+      )}
     </div>
   )
 }

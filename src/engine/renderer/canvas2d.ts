@@ -1,30 +1,25 @@
-import type { Camera, Layer, SketchDocument, StrokeElement } from '@/model/types'
-import { BRUSH_PRESETS } from '@/engine/brushes/presets'
-import { liveOutline, outlineToPath, strokeOutline } from '@/engine/brushes/stroke'
-import { boundsFromPoints } from '@/model/factory'
-import { handleLayout } from '@/engine/selection'
-import type { IRenderer, LiveStroke, RenderInput } from './types'
+import type { BlendMode, Camera, SketchDocument, StrokeElement, StrokePoint } from '@/model/types'
+import { getBrush } from '@/engine/brushes/library'
+import { outlineToPath, strokeOutline } from '@/engine/brushes/stroke'
+import type { LiveStroke, PaintEngine, SceneInput } from './types'
 
-const ACCENT = '#7c5cff'
+// Canvas2D fallback engine (used when WebGL2 is unavailable). It renders strokes
+// as flat variable-width fills — no texture/grain — but supports layers, layer
+// opacity, blend modes (via globalCompositeOperation), and erasing.
 
-interface LayerCache {
-  canvas: HTMLCanvasElement
-  ctx: CanvasRenderingContext2D
-  version: number
-  cameraKey: string
-  sizeKey: string
+const BLEND_TO_COMPOSITE: Record<BlendMode, GlobalCompositeOperation> = {
+  normal: 'source-over',
+  multiply: 'multiply',
+  screen: 'screen',
+  overlay: 'overlay',
+  darken: 'darken',
+  lighten: 'lighten',
+  'color-dodge': 'color-dodge',
+  add: 'lighter',
+  'soft-light': 'soft-light',
 }
 
-function cameraKey(c: Camera): string {
-  return `${c.x.toFixed(3)},${c.y.toFixed(3)},${c.zoom.toFixed(4)},${c.rotation.toFixed(4)}`
-}
-
-/** Canvas transform matrix that maps world coordinates -> device pixels. */
-function applyCameraTransform(
-  ctx: CanvasRenderingContext2D,
-  c: Camera,
-  dpr: number,
-): void {
+function applyCameraTransform(ctx: CanvasRenderingContext2D, c: Camera, dpr: number): void {
   const s = c.zoom
   const cos = Math.cos(c.rotation)
   const sin = Math.sin(c.rotation)
@@ -37,12 +32,12 @@ function applyCameraTransform(
   ctx.setTransform(dpr * a, dpr * b, dpr * cc, dpr * d, dpr * e, dpr * f)
 }
 
-export class Canvas2DRenderer implements IRenderer {
+export class Canvas2DRenderer implements PaintEngine {
   private canvas: HTMLCanvasElement | null = null
   private ctx: CanvasRenderingContext2D | null = null
-  private layerCaches = new Map<string, LayerCache>()
-  /** Path2D cache keyed by element id; rebuilt when the source reference changes. */
-  private pathCache = new Map<string, { path: Path2D; ref: StrokeElement }>()
+  private layerCanvas = document.createElement('canvas')
+  private layerCtx = this.layerCanvas.getContext('2d')!
+  private live: LiveStroke | null = null
 
   attach(canvas: HTMLCanvasElement): void {
     this.canvas = canvas
@@ -50,245 +45,134 @@ export class Canvas2DRenderer implements IRenderer {
   }
 
   dispose(): void {
-    this.layerCaches.clear()
-    this.pathCache.clear()
     this.canvas = null
     this.ctx = null
   }
 
-  private getPath(el: StrokeElement): Path2D {
-    const cached = this.pathCache.get(el.id)
-    if (cached && cached.ref === el) return cached.path
-    const path = outlineToPath(strokeOutline(el))
-    this.pathCache.set(el.id, { path, ref: el })
-    return path
+  beginStroke(live: LiveStroke): void {
+    this.live = live
   }
-
-  private ensureCache(layer: Layer, wDev: number, hDev: number): LayerCache {
-    let cache = this.layerCaches.get(layer.id)
-    if (!cache) {
-      const c = document.createElement('canvas')
-      cache = {
-        canvas: c,
-        ctx: c.getContext('2d')!,
-        version: -1,
-        cameraKey: '',
-        sizeKey: '',
-      }
-      this.layerCaches.set(layer.id, cache)
-    }
-    if (cache.canvas.width !== wDev || cache.canvas.height !== hDev) {
-      cache.canvas.width = wDev
-      cache.canvas.height = hDev
-    }
-    return cache
+  extendStroke(points: StrokePoint[]): void {
+    if (this.live) this.live.points.push(...points)
+  }
+  commitStroke(): void {
+    this.live = null
+  }
+  cancelStroke(): void {
+    this.live = null
   }
 
   private paintStroke(
     ctx: CanvasRenderingContext2D,
-    path: Path2D,
-    el: Pick<StrokeElement, 'brush' | 'color' | 'opacity'>,
+    points: StrokePoint[],
+    size: number,
+    color: string,
+    opacity: number,
+    erase: boolean,
+    marker: boolean,
   ): void {
-    const preset = BRUSH_PRESETS[el.brush]
+    if (points.length === 0) return
+    const path = outlineToPath(strokeOutline(points, size))
     ctx.save()
-    ctx.globalCompositeOperation = preset.composite
-    ctx.globalAlpha = el.opacity
-    ctx.fillStyle = el.brush === 'eraser' ? '#000' : el.color
+    ctx.globalAlpha = opacity
+    ctx.globalCompositeOperation = erase ? 'destination-out' : marker ? 'multiply' : 'source-over'
+    ctx.fillStyle = erase ? '#000' : color
     ctx.fill(path)
     ctx.restore()
   }
 
-  private renderLayerContent(
-    cache: LayerCache,
-    doc: SketchDocument,
-    layer: Layer,
-    camera: Camera,
-    dpr: number,
-    live: LiveStroke | null,
-  ): void {
-    const { ctx } = cache
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
-    ctx.clearRect(0, 0, cache.canvas.width, cache.canvas.height)
-    applyCameraTransform(ctx, camera, dpr)
-
-    for (const el of doc.elements) {
-      if (el.layerId !== layer.id) continue
-      if (el.type !== 'stroke') continue // shapes/text/images: future
-      this.paintStroke(ctx, this.getPath(el), el)
-    }
-
-    // Draw the in-progress stroke into its owning layer so eraser/marker
-    // composite correctly against just this layer's pixels.
-    if (live && live.layerId === layer.id && live.points.length > 0) {
-      const outline = liveOutline(live.points, live.brush, live.size)
-      this.paintStroke(ctx, outlineToPath(outline), live)
-    }
-  }
-
-  render(input: RenderInput): void {
-    const { doc, camera, width, height, dpr, layerVersion, live } = input
+  render(input: SceneInput): void {
+    const { doc, camera, width, height, dpr } = input
     if (!this.canvas || !this.ctx) return
-
-    const wDev = Math.max(1, Math.round(width * dpr))
-    const hDev = Math.max(1, Math.round(height * dpr))
-    if (this.canvas.width !== wDev || this.canvas.height !== hDev) {
-      this.canvas.width = wDev
-      this.canvas.height = hDev
+    const dw = Math.max(1, Math.round(width * dpr))
+    const dh = Math.max(1, Math.round(height * dpr))
+    if (this.canvas.width !== dw || this.canvas.height !== dh) {
+      this.canvas.width = dw
+      this.canvas.height = dh
+    }
+    if (this.layerCanvas.width !== dw || this.layerCanvas.height !== dh) {
+      this.layerCanvas.width = dw
+      this.layerCanvas.height = dh
     }
 
     const ctx = this.ctx
     ctx.setTransform(1, 0, 0, 1, 0, 0)
-    ctx.clearRect(0, 0, wDev, hDev)
+    ctx.clearRect(0, 0, dw, dh)
+    ctx.fillStyle = '#121218'
+    ctx.fillRect(0, 0, dw, dh)
 
-    // Background fills the whole viewport.
+    // Document background rectangle.
+    applyCameraTransform(ctx, camera, dpr)
     ctx.fillStyle = doc.background
-    ctx.fillRect(0, 0, wDev, hDev)
+    ctx.fillRect(0, 0, doc.width, doc.height)
 
-    const camKey = cameraKey(camera)
-    const sizeKey = `${wDev}x${hDev}`
     const layers = [...doc.layers].sort((a, b) => a.order - b.order)
-
     for (const layer of layers) {
       if (!layer.visible) continue
-      const cache = this.ensureCache(layer, wDev, hDev)
-      const hasLive = !!live && live.layerId === layer.id
-      const version = layerVersion[layer.id] ?? 0
-      const stale =
-        cache.version !== version || cache.cameraKey !== camKey || cache.sizeKey !== sizeKey
-      if (stale || hasLive) {
-        this.renderLayerContent(cache, doc, layer, camera, dpr, live)
-        // Don't persist the cache key while a live stroke is baked in.
-        cache.version = hasLive ? -1 : version
-        cache.cameraKey = hasLive ? '' : camKey
-        cache.sizeKey = sizeKey
+      const lctx = this.layerCtx
+      lctx.setTransform(1, 0, 0, 1, 0, 0)
+      lctx.clearRect(0, 0, dw, dh)
+      applyCameraTransform(lctx, camera, dpr)
+
+      for (const el of doc.elements) {
+        if (el.layerId !== layer.id || el.type !== 'stroke') continue
+        const s = el as StrokeElement
+        const brush = getBrush(s.brushId)
+        this.paintStroke(lctx, s.points, s.size, s.color, s.opacity, brush.erase, brush.composite === 'multiply')
       }
+      if (this.live && this.live.layerId === layer.id && this.live.points.length) {
+        const brush = getBrush(this.live.brushId)
+        this.paintStroke(
+          lctx,
+          this.live.points,
+          this.live.size,
+          this.live.color,
+          this.live.opacity,
+          brush.erase,
+          brush.composite === 'multiply',
+        )
+      }
+
       ctx.save()
-      ctx.globalAlpha = layer.opacity
       ctx.setTransform(1, 0, 0, 1, 0, 0)
-      ctx.drawImage(cache.canvas, 0, 0)
+      ctx.globalAlpha = layer.opacity
+      ctx.globalCompositeOperation = BLEND_TO_COMPOSITE[layer.blendMode] ?? 'source-over'
+      ctx.drawImage(this.layerCanvas, 0, 0)
       ctx.restore()
     }
-
-    // Drop caches for deleted layers.
-    if (this.layerCaches.size > layers.length) {
-      const alive = new Set(layers.map((l) => l.id))
-      for (const id of [...this.layerCaches.keys()]) {
-        if (!alive.has(id)) this.layerCaches.delete(id)
-      }
-    }
-
-    this.drawOverlay(ctx, input)
-  }
-
-  /** Selection box + transform handles + marquee, drawn in CSS pixels. */
-  private drawOverlay(ctx: CanvasRenderingContext2D, input: RenderInput): void {
-    const { selectionBounds, marquee, camera, dpr } = input
-    if (!selectionBounds && !marquee) return
-    ctx.save()
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-
-    if (marquee) {
-      ctx.strokeStyle = ACCENT
-      ctx.fillStyle = 'rgba(124, 92, 255, 0.12)'
-      ctx.lineWidth = 1
-      ctx.setLineDash([5, 4])
-      ctx.fillRect(marquee.x, marquee.y, marquee.w, marquee.h)
-      ctx.strokeRect(marquee.x, marquee.y, marquee.w, marquee.h)
-      ctx.setLineDash([])
-    }
-
-    if (selectionBounds) {
-      const l = handleLayout(selectionBounds, camera)
-      const c = l.corners
-      ctx.strokeStyle = ACCENT
-      ctx.lineWidth = 1.5
-      ctx.beginPath()
-      ctx.moveTo(c.nw.x, c.nw.y)
-      ctx.lineTo(c.ne.x, c.ne.y)
-      ctx.lineTo(c.se.x, c.se.y)
-      ctx.lineTo(c.sw.x, c.sw.y)
-      ctx.closePath()
-      ctx.stroke()
-
-      // rotate stalk + knob
-      ctx.beginPath()
-      ctx.moveTo(l.rotateAnchor.x, l.rotateAnchor.y)
-      ctx.lineTo(l.rotate.x, l.rotate.y)
-      ctx.stroke()
-      this.knob(ctx, l.rotate.x, l.rotate.y, 6, true)
-
-      // corner scale handles
-      for (const k of ['nw', 'ne', 'se', 'sw'] as const) {
-        this.knob(ctx, c[k].x, c[k].y, 5, false)
-      }
-    }
-    ctx.restore()
-  }
-
-  private knob(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    r: number,
-    round: boolean,
-  ): void {
-    ctx.fillStyle = '#ffffff'
-    ctx.strokeStyle = ACCENT
-    ctx.lineWidth = 1.5
-    ctx.beginPath()
-    if (round) ctx.arc(x, y, r, 0, Math.PI * 2)
-    else ctx.rect(x - r, y - r, r * 2, r * 2)
-    ctx.fill()
-    ctx.stroke()
   }
 
   exportToCanvas(doc: SketchDocument, scale = 1): HTMLCanvasElement {
-    // Fit all elements into a tight bounds (fallback to a default page size).
-    let b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
-    for (const el of doc.elements) {
-      b.minX = Math.min(b.minX, el.bbox.minX)
-      b.minY = Math.min(b.minY, el.bbox.minY)
-      b.maxX = Math.max(b.maxX, el.bbox.maxX)
-      b.maxY = Math.max(b.maxY, el.bbox.maxY)
-    }
-    if (!Number.isFinite(b.minX)) b = { minX: 0, minY: 0, maxX: 1280, maxY: 800 }
-    const pad = 24
-    const worldW = b.maxX - b.minX + pad * 2
-    const worldH = b.maxY - b.minY + pad * 2
-
     const out = document.createElement('canvas')
-    out.width = Math.max(1, Math.round(worldW * scale))
-    out.height = Math.max(1, Math.round(worldH * scale))
+    out.width = Math.max(1, Math.round(doc.width * scale))
+    out.height = Math.max(1, Math.round(doc.height * scale))
     const ctx = out.getContext('2d')!
+    ctx.scale(scale, scale)
     ctx.fillStyle = doc.background
-    ctx.fillRect(0, 0, out.width, out.height)
+    ctx.fillRect(0, 0, doc.width, doc.height)
 
-    const exportCamera: Camera = {
-      x: b.minX - pad,
-      y: b.minY - pad,
-      zoom: 1,
-      rotation: 0,
-    }
+    const tmp = document.createElement('canvas')
+    tmp.width = doc.width
+    tmp.height = doc.height
+    const tctx = tmp.getContext('2d')!
 
-    const layers = [...doc.layers].sort((a, b2) => a.order - b2.order)
+    const layers = [...doc.layers].sort((a, b) => a.order - b.order)
     for (const layer of layers) {
       if (!layer.visible) continue
-      const tmp = document.createElement('canvas')
-      tmp.width = out.width
-      tmp.height = out.height
-      const tctx = tmp.getContext('2d')!
-      applyCameraTransform(tctx, exportCamera, scale)
+      tctx.setTransform(1, 0, 0, 1, 0, 0)
+      tctx.clearRect(0, 0, doc.width, doc.height)
       for (const el of doc.elements) {
         if (el.layerId !== layer.id || el.type !== 'stroke') continue
-        this.paintStroke(tctx, outlineToPath(strokeOutline(el)), el)
+        const s = el as StrokeElement
+        const brush = getBrush(s.brushId)
+        this.paintStroke(tctx, s.points, s.size, s.color, s.opacity, brush.erase, brush.composite === 'multiply')
       }
+      ctx.save()
       ctx.globalAlpha = layer.opacity
+      ctx.globalCompositeOperation = BLEND_TO_COMPOSITE[layer.blendMode] ?? 'source-over'
       ctx.drawImage(tmp, 0, 0)
-      ctx.globalAlpha = 1
+      ctx.restore()
     }
     return out
   }
 }
-
-// Re-export a helper used by tools when committing a live stroke.
-export { boundsFromPoints }

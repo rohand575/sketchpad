@@ -1,13 +1,13 @@
 import { useEffect } from 'react'
 import { useStore } from '@/store/store'
-import { BRUSH_PRESETS } from '@/engine/brushes/presets'
-import type { BrushType } from '@/model/types'
+import { getBrush } from '@/engine/brushes/library'
 
-const TOOL_KEYS: Record<string, BrushType> = {
-  b: 'pen',
-  p: 'pencil',
+// Quick brush shortcuts (Procreate-ish): B pen, P pencil, M marker, E eraser.
+const BRUSH_KEYS: Record<string, string> = {
+  b: 'studio-pen',
+  p: 'technical-pencil',
   m: 'marker',
-  e: 'eraser',
+  e: 'eraser-hard',
 }
 
 /** Desktop keyboard shortcuts. `spaceRef` is toggled for space-drag panning. */
@@ -54,15 +54,15 @@ export function useKeyboardShortcuts(spaceRef: React.MutableRefObject<boolean>):
       }
       if (e.key === '[' || e.key === ']') {
         const delta = e.key === '[' ? -1 : 1
-        const preset = BRUSH_PRESETS[s.tool.tool]
-        const cur = s.tool.sizes[s.tool.tool]
+        const brush = getBrush(s.tool.brushId)
+        const cur = s.tool.sizes[s.tool.brushId]
         const step = Math.max(1, Math.round(cur * 0.15))
-        const next = Math.min(preset.maxSize, Math.max(preset.minSize, cur + delta * step))
+        const next = Math.min(brush.maxSize, Math.max(brush.minSize, cur + delta * step))
         s.setBrushSize(next)
         return
       }
-      const tool = TOOL_KEYS[e.key.toLowerCase()]
-      if (tool) s.setTool(tool)
+      const brushId = BRUSH_KEYS[e.key.toLowerCase()]
+      if (brushId) s.setBrush(brushId)
     }
 
     const onKeyUp = (e: KeyboardEvent) => {

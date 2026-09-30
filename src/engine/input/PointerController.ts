@@ -122,7 +122,7 @@ export class PointerController {
   private toStrokePoint(e: PointerEvent): StrokePoint {
     const p = this.localPoint(e)
     const w = screenToWorld(this.cb.getCamera(), p.x, p.y)
-    return { x: w.x, y: w.y, p: this.pressureOf(e) }
+    return { x: w.x, y: w.y, p: this.pressureOf(e), tx: e.tiltX || 0, ty: e.tiltY || 0 }
   }
 
   private worldAt(e: PointerEvent): Point {
